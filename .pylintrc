@@ -1,0 +1,6 @@
+[MESSAGES CONTROL]
+disable=fixme,
+        invalid-name,
+        logging-not-lazy,
+        missing-docstring,
+        too-few-public-methods

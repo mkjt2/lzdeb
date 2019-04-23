@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+set -e
+
+cd ripgrep*/
+# cargo install does lots more than just copying the binary to the right place
+# so let's just do it manually.
+cp ./target/release/rg /usr/local/bin/rg

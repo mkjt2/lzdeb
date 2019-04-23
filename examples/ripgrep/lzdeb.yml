@@ -1,0 +1,16 @@
+builder:
+  image: rust:latest
+source:
+  type: git
+  url: https://github.com/BurntSushi/ripgrep.git
+  ref: 11.0.1
+  pull_submodules: yes
+deb_info:
+  pkgname: ripgrep
+  pkgversion: 11.0.1
+  pkgrelease: 1
+  pkglicense: MIT
+  pkggroup: main
+  maintainer: example@lzdeb.invalid
+  description: ripgrep recursively searches directories for a regex pattern
+

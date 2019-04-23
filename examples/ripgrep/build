@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+set -e
+
+cd ripgrep*/
+cargo build --release
+./target/release/rg --version

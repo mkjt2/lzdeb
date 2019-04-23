@@ -1,0 +1,8 @@
+.idea/
+venv/
+**/*.pyc
+.mypy_cache/
+.coveraga/e
+dist/
+build/
+*.egg-info
