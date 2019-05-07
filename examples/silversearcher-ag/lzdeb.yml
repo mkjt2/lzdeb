@@ -1,0 +1,27 @@
+builder:
+  image: ubuntu:16.04
+  bootstrap_cmds:
+    - apt update
+    - apt install -y git
+validator:
+  image: ubuntu:18.04
+  bootstrap_cmds:
+    - apt update
+source:
+  type: git
+  url: https://github.com/ggreer/the_silver_searcher.git
+  ref: 2.2.0
+  pull_submodules: yes
+deb_info:
+  pkgname: silversearcher-ag
+  pkgversion: 2.2.0
+  pkgrelease: 1
+  pkglicense: Apache 2.0
+  pkggroup: main
+  maintainer: example@lzdeb.invalid
+  description: "A code-searching tool similar to ack, but faster. http://geoff.greer.fm/ag/"
+  requires:
+    - liblzma-dev>=5.1.1
+    - libpcre3-dev>=2:8.38
+    - zlib1g-dev>=1:1.2.8
+
