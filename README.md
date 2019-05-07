@@ -34,11 +34,19 @@ $ ls *.deb
 ripgrep_11.0.1-1_amd64.deb
 ```
 
-### Contributions are welcome
+### How To Contribute
 
-This is a brand new project - the following areas need some love:
+* Fork the repo.
+* In a [virtualenv](https://virtualenv.pypa.io/en/latest/#):
+   * `pip3 install -r requirements.txt`
+   * `pip3 install -r .circleci/test_requirements`
+* _Hack Away!_
+* Testing:
+   * New unit tests to go in `test/`
+   * If you have [CircleCI](https://circleci.com) access, make sure the `test_all` workflow passes.
+   * Otherwise, you could run tests manually (see `.circleci/config.yml`):
+      * unit tests: `py.test --cov=lzdeb test/`
+      * lint: `pylint -E lzdeb test`
+      * pep8: `pycodestyle lzdeb test`
+      * type hint checking: `mypy lzdeb test`
 
-* Test coverage (unit / functional).
-* Check the TODOs.
-* Verify that this works on Linux
-* Improve this README
