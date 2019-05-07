@@ -113,6 +113,7 @@ class Builder:
             raise RuntimeError("Bad return code!")
         if return_output:
             return output_str
+        return None
 
     def import_file(self, src_path: str, dest_path: str) -> None:
         """cp a file into the container"""
