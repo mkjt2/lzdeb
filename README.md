@@ -3,9 +3,9 @@
 
 ### Installation
 
-1. Install Python 3
-1. Install Docker
-1. Install the pip package:
+1. [Install Python 3](https://docs.python-guide.org/starting/installation/)
+1. [Install Docker](https://docs.docker.com/install/)
+1. [Install the pip package](https://pip.pypa.io/en/stable/):
 ```bash
 $ pip3 install lzdeb
 ```
