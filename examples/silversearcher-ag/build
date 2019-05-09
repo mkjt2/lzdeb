@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+set -e
+
+apt-get update
+apt-get install -y \
+  automake \
+  pkg-config \
+  libpcre3-dev \
+  zlib1g-dev \
+  liblzma-dev
+
+cd the_silver_searcher*/
+./build.sh

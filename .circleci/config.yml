@@ -27,7 +27,10 @@ jobs:
     - checkout
     - run: sudo pip install -r requirements.txt
     - setup_remote_docker
-    - run: PYTHONPATH=$(pwd) scripts/lzdeb build --verbose examples/ripgrep
+    - run: PYTHONPATH=$(pwd) scripts/lzdeb build examples/ripgrep
+    - run: ls -l ripgrep*.deb
+    - run: PYTHONPATH=$(pwd) scripts/lzdeb build examples/silversearcher-ag
+    - run: ls -l silversearcher*.deb
 workflows:
   version: 2
   test_all:

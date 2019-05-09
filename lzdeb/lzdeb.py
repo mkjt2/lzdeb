@@ -5,6 +5,7 @@ import re
 import shutil
 import sys
 import tarfile
+import time
 import uuid
 from abc import ABC, abstractmethod
 from shlex import quote as q
@@ -45,8 +46,6 @@ class GitSource(Source):
     """Pull source code from a git repo."""
 
     def __init__(self, url: str, ref: str, pull_submodules: bool = False):
-        if not program_available('git'):
-            raise EnvironmentError("git CLI not found.")
         self.url = url
         self.ref = ref
         self.pull_submodules = pull_submodules
@@ -73,29 +72,73 @@ class GitSource(Source):
         return local_repo_dir
 
 
-class Builder:
-    """Wrapper around a docker container package building environment"""
+class CommandError(Exception):
+    def __init__(self, rc: int, msg: str = ''):
+        self.rc = rc
+        self.msg = msg
 
-    def __init__(self, image: str = ''):
+
+class DockerContainer:
+    """Wrapper around a docker container p"""
+
+    def __init__(self, image: str = '', bootstrap_cmds: List[str] = []):
         if not program_available('docker'):
             raise EnvironmentError("docker CLI not found.")
+        self.bootstrap_cmds = bootstrap_cmds
         self.image = image
         self.docker_client = docker.from_env()
-        logging.info("Starting docker container...")
+        self.container = None
+
+    def bootstrap_container(self) -> None:
+        """Run bootstrap commands"""
+        if not self.bootstrap_cmds:
+            return
+        logging.info("Running %d bootstrapping commands...", len(self.bootstrap_cmds))
+        for c in self.bootstrap_cmds:
+            self.run_cmd(c)
+
+    def program_available(self, program) -> bool:
+        try:
+            self.run_cmd('which %s' % program)
+            logging.info("Program '%s' is available.", program)
+            return True
+        except CommandError as ce:
+            if ce.rc != 1:
+                msg = "Unexpected return code (%d) when checking for program (%s) presence"
+                raise RuntimeError(msg % (ce.rc, program))
+            logging.warning("Program '%s' is missing.", program)
+            return False
+
+    def start(self, label: str = '') -> None:
+        if self.container is not None:
+            logging.warning("Cannot start container again - already started!")
+            return
+        name = None
+        if label:
+            name = '%s_%d' % (label, int(time.time()))
+        logging.info("Starting docker container (%s)", name)
         self.container = self.docker_client.containers.run(
             image=self.image,
+            name=name,
             command=['sleep', '100000'],  # TODO hack! can we do better?
             detach=True,
             auto_remove=True)
+        logging.info("Started %s", str(self.container))
 
-    def stop_container(self) -> None:
+    def stop(self) -> None:
         """Stop the container"""
-        logging.info("Stopping container %s", self.container)
+        if self.container is None:
+            logging.warning("Container never started... nothing to stop")
+            return
+        logging.debug("Stopping container %s", self.container)
         self.container.stop()
 
     @staticmethod
-    def from_data(data: dict) -> 'Builder':
-        return Builder(image=get(data, 'image', required=True))
+    def from_data(data: dict) -> 'DockerContainer':
+        if data is None:
+            return None
+        return DockerContainer(image=get(data, 'image', required=True),
+                               bootstrap_cmds=get(data, 'bootstrap_cmds', default=[]))
 
     def run_cmd(self, cmd: str, cwd: str = None, return_output=False) -> Optional[str]:
         """Run a command inside the container (docker exec)"""
@@ -110,13 +153,15 @@ class Builder:
         exec_result = container_exec(container=self.container, cmd=exec_cmd, stream=True)
         res, output_str = exec_result.communicate(return_output=return_output)
         if res != 0:
-            raise RuntimeError("Bad return code!")
+            raise CommandError(rc=res, msg="Bad return code!")
         if return_output:
             return output_str
         return None
 
     def import_file(self, src_path: str, dest_path: str) -> None:
         """cp a file into the container"""
+        if self.container is None:
+            raise RuntimeError("Container not started - cannot import file into it")
         src_path_tar = '/tmp/' + str(uuid.uuid4())
         try:
             with tarfile.open(name=src_path_tar, mode='w') as tf:
@@ -133,8 +178,10 @@ class Builder:
             return output.splitlines()
         raise RuntimeError("output is always a string")
 
-    def export_file(self, src_path, dest_dir) -> None:
+    def export_file(self, src_path, dest_dir) -> str:
         """cp a file out of the container"""
+        if self.container is None:
+            raise RuntimeError("Container not started - cannot export file from it")
         os.makedirs(dest_dir, exist_ok=True)
         data_chunks, st_info = self.container.get_archive(src_path)
         try:
@@ -144,6 +191,7 @@ class Builder:
                     f.write(chunk)
             with tarfile.open(collected_archive, mode='r') as tf:
                 tf.extractall(path=dest_dir)
+            return os.path.join(dest_dir, os.path.basename(src_path))
         finally:
             if os.path.exists(collected_archive):
                 os.remove(collected_archive)
@@ -182,7 +230,7 @@ class DebInfo:
             requires=get(data, 'requires', required=False),
         )
 
-    def prepare(self, builder: Builder, work_dir: str):
+    def prepare(self, builder: DockerContainer, work_dir: str):
         src_descript_pak_file = os.path.join(self.tmp_pak_dir, 'description-pak')
         os.makedirs(self.tmp_pak_dir)
         dest_descript_pak_file = os.path.join(work_dir, 'description-pak')
@@ -197,19 +245,19 @@ class DebInfo:
     def _get_checkinstall_requires_opt(self) -> str:
         parts = []
         for r in self.requires:
-            m = re.search(r'^([^><=]+)(=([^><=]+))$', r)
+            m = re.search(r'^([^><=]+)(([><]?=)([^><=]+))$', r)
             if not m:
                 raise ValueError("requirement %s is bad." % r)
-            pkg_name, pkg_version = m.group(1), m.group(3)
-            final_fmt = '%s (=%s)' % (pkg_name, pkg_version)
+            pkg_name, vers_constraint, pkg_version = m.group(1), m.group(3), m.group(4)
+            final_fmt = '%s (%s%s)' % (pkg_name, vers_constraint, pkg_version)
             parts.append(final_fmt)
         opt_str = '--requires=' + (','.join(parts))
-        for c in ['(', ')', '>']:
+        for c in ['(', ')', '>', '<']:
             opt_str = opt_str.replace(c, '\\' + c)
         return opt_str
 
     def debianize_cmd(self, cmd: str) -> str:
-        checkinstall_cmd = "sudo checkinstall -D -y --install=no --backup=no --fstrans=no"
+        checkinstall_cmd = "checkinstall -D -y --install=no --backup=no --fstrans=no"
         checkinstall_cmd += ' ' + q("--maintainer=" + self.maintainer)
         checkinstall_cmd += ' ' + q("--pkgname=" + self.pkgname)
         checkinstall_cmd += ' ' + q("--pkgrelease=" + self.pkgrelease)
@@ -228,18 +276,21 @@ class LzDeb:
 
     def __init__(self,
                  config_dir: str,
-                 builder: Builder,
+                 builder: DockerContainer,
+                 validator: DockerContainer,
                  source: Source,
                  deb_info: DebInfo,
                  collect_path: str = '',
                  artifact_type: str = ''):
         self.config_dir = config_dir
         self.builder = builder
+        self.validator = validator
         self.source = source
         self.deb_info = deb_info
         self.collect_path = collect_path
         self.artifact_type = artifact_type
         self.work_dir = '/var/tmp/' + str(uuid.uuid4())
+        self._deb_file = None
 
     @property
     def build_script(self) -> str:
@@ -251,11 +302,17 @@ class LzDeb:
         """Location of the install script for this package"""
         return os.path.join(self.config_dir, 'install')
 
+    @property
+    def validate_script(self) -> str:
+        """Location of the validate script for this package"""
+        return os.path.join(self.config_dir, 'validate')
+
     @staticmethod
     def from_data(config_dir: str, data: dict) -> 'LzDeb':
         """Create a LzDeb object based on a config directory and yaml config dict."""
         return LzDeb(config_dir=config_dir,
-                     builder=Builder.from_data(get(data, 'builder', required=True)),
+                     builder=DockerContainer.from_data(get(data, 'builder', required=True)),
+                     validator=DockerContainer.from_data(get(data, 'validator')),
                      source=SourceFactory.create_source(get(data, 'source', required=True)),
                      deb_info=DebInfo.from_data(get(data, 'deb_info')))
 
@@ -272,32 +329,39 @@ class LzDeb:
             data = yaml.safe_load(f)
             return LzDeb.from_data(config_dir, data)
 
-    def inject_script(self, script_path: str) -> str:
-        """Copy the build script into the Builder container."""
-        dest_path = os.path.join(self.work_dir, os.path.basename(script_path))
-        self.builder.import_file(src_path=script_path, dest_path=dest_path)
+    def inject_file(self, container: DockerContainer, file_path: str) -> str:
+        """Copy the build script into the DockerContainer container."""
+        dest_path = os.path.join(self.work_dir, os.path.basename(file_path))
+        container.import_file(src_path=file_path, dest_path=dest_path)
         return dest_path
 
-    def build(self) -> None:
+    def build(self) -> str:
         """Build the debian package!
            - retrieve the source code
            - run the build script on it
            - collect the .deb file
         """
         try:
+            self.builder.start('lzdeb_build')
+            self.builder.bootstrap_container()
+            for p in ['apt', 'apt-get', 'git']:
+                if not self.builder.program_available(p):
+                    raise EnvironmentError("Program '%s' must be available!" % p)
             run_cmd = self.builder.run_cmd
+
             run_cmd('mkdir -p ' + self.work_dir)
             local_repo_dir = self.source.retrieve(run_cmd=run_cmd, work_dir=self.work_dir)
             logging.info("Got the source at %s" % local_repo_dir)
-            run_cmd(self.inject_script(self.build_script), cwd=self.work_dir)
+            run_cmd(self.inject_file(container=self.builder, file_path=self.build_script),
+                    cwd=self.work_dir)
             logging.info("Finished running build script")
 
             try:
                 self.deb_info.prepare(builder=self.builder, work_dir=self.work_dir)
                 # TODO let's do better than this
-                self.builder.run_cmd('apt update && apt-get install checkinstall sudo -y')
+                run_cmd('apt update && apt-get install -y checkinstall')
                 debianized_cmd = self.deb_info.debianize_cmd(
-                    cmd=self.inject_script(script_path=self.install_script))
+                    cmd=self.inject_file(container=self.builder, file_path=self.install_script))
                 run_cmd(cmd=debianized_cmd, cwd=self.work_dir)
 
                 deb_files = self.builder.list_files(
@@ -305,33 +369,45 @@ class LzDeb:
                 assert len(deb_files) == 1, "Expected exactly %d deb files, saw %s" + str(deb_files)
                 deb_file = deb_files[0]
                 run_cmd("ls -l " + deb_file)
-                self.builder.export_file(deb_file, os.getcwd())
+                return self.builder.export_file(deb_file, os.getcwd())
             finally:
                 self.deb_info.cleanup()
 
             logging.info("Finished running install script")
         finally:
-            self.builder.stop_container()
+            self.builder.stop()
+
+    def validate(self, deb_file: str) -> None:
+        if not os.path.exists(self.validate_script):
+            return
+        try:
+            logging.info("Validating deb file %s", deb_file)
+            self.validator.start('lzdeb_validate')
+            self.validator.bootstrap_container()
+            run_cmd = self.validator.run_cmd
+            run_cmd('mkdir -p ' + self.work_dir)
+            validate_script = self.inject_file(container=self.validator,
+                                               file_path=self.validate_script)
+            self.inject_file(container=self.validator, file_path=deb_file)
+            run_cmd(cmd=validate_script, cwd=self.work_dir)
+        finally:
+            self.validator.stop()
 
 
 def handle_build(args) -> int:
     """lzdeb build"""
     handle_common(args)
     r = LzDeb.from_config_dir(args.config_dir)
-    r.build()
+    deb_file = r.build()
+    r.validate(deb_file)
     return 0
 
 
 def handle_common(args) -> None:
     """logic common to all sub-commands.  E.g. logger setup"""
-    if args.verbose:
-        logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
-    else:
-        logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-
-
-def add_common_flags(subparser: argparse.ArgumentParser) -> None:
-    subparser.add_argument('--verbose', action='store_true', help='increase logging verbosity')
+    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
+                        stream=sys.stdout,
+                        level=logging.INFO)
 
 
 def main() -> int:
@@ -340,7 +416,9 @@ def main() -> int:
     build_parser = subparsers.add_parser('build')
     build_parser.add_argument('config_dir', help="lzdeb build config dir")
     build_parser.set_defaults(func=handle_build)
-    add_common_flags(build_parser)
 
     args = parser.parse_args()
-    return args.func(args)
+    try:
+        return args.func(args)
+    except KeyboardInterrupt:
+        return 1

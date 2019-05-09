@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+
+set -e
+
+cd the_silver_searcher*/
+make install

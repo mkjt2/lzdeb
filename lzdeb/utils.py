@@ -1,6 +1,6 @@
 import distutils.spawn
 import sys
-from typing import Any, Tuple
+from typing import Any, List, Tuple
 
 
 def program_available(name: str) -> bool:
@@ -19,18 +19,18 @@ def get(data: dict, key: str, default: Any = None, required: bool = False) -> An
 
 class ContainerExec:
 
-    def __init__(self, client, id, output):
+    def __init__(self, client, id: int, output):
         self.client = client
         self.id = id
         self.output = output
 
-    def inspect(self):
+    def inspect(self) -> dict:
         return self.client.api.exec_inspect(self.id)
 
-    def poll(self):
+    def poll(self) -> int:
         return self.inspect()['ExitCode']
 
-    def communicate(self, return_output=False) -> Tuple[int, str]:
+    def communicate(self, return_output: bool = False) -> Tuple[int, str]:
         output_parts = []
         for o in self.output:
             o = o.decode()
@@ -46,9 +46,19 @@ class ContainerExec:
             return self.poll(), ''
 
 
-def container_exec(container, cmd, stdout=True, stderr=True, stdin=False,
-                   tty=False, privileged=False, user='', detach=False,
-                   stream=False, socket=False, environment=None, workdir=None) -> ContainerExec:
+def container_exec(container,
+                   cmd: List[str],
+                   stdout: bool = True,
+                   stderr: bool = True,
+                   stdin: bool = False,
+                   tty: bool = False,
+                   privileged: bool = False,
+                   user: str = '',
+                   detach: bool = False,
+                   stream: bool = False,
+                   socket: bool = False,
+                   environment: bool = None,
+                   workdir: str = None) -> ContainerExec:
     """
     An enhanced version of #docker.Container.exec_run() which returns an object
     that can be properly inspected for the status of the executed commands.
