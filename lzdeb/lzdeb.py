@@ -17,6 +17,17 @@ import yaml
 from lzdeb.utils import container_exec, get, program_available
 
 
+class BColors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+
 class Source(ABC):
     """Generic type to represent source for source code (E.g. GitSource)"""
 
@@ -120,7 +131,7 @@ class DockerContainer:
         self.container = self.docker_client.containers.run(
             image=self.image,
             name=name,
-            command=['sleep', '100000'],  # TODO hack! can we do better?
+            command=['sleep', '1000000'],  # TODO hack! can we do better?
             detach=True,
             auto_remove=True)
         logging.info("Started %s", str(self.container))
@@ -130,7 +141,7 @@ class DockerContainer:
         if self.container is None:
             logging.warning("Container never started... nothing to stop")
             return
-        logging.debug("Stopping container %s", self.container)
+        logging.info("Stopping container %s", self.container)
         self.container.stop()
 
     @staticmethod
@@ -142,7 +153,7 @@ class DockerContainer:
 
     def run_cmd(self, cmd: str, cwd: str = None, return_output=False) -> Optional[str]:
         """Run a command inside the container (docker exec)"""
-        logging.info(cmd)
+        logging.info("Raw command requested: %s", cmd)
         # TODO circleci docker cannot set exec_run(workdir)
         exec_cmd = ['/bin/bash', '-c']
         if cwd:
@@ -150,6 +161,7 @@ class DockerContainer:
         else:
             exec_cmd.append(cmd)
 
+        logging.debug("In-container command: " + str(exec_cmd))
         exec_result = container_exec(container=self.container, cmd=exec_cmd, stream=True)
         res, output_str = exec_result.communicate(return_output=return_output)
         if res != 0:
@@ -327,6 +339,8 @@ class LzDeb:
         yaml_path = os.path.join(config_dir, 'lzdeb.yml')
         with open(yaml_path) as f:
             data = yaml.safe_load(f)
+            logging.info("Loaded LZDeb config from %s", config_dir)
+            logging.info("\n" + yaml.safe_dump(data, default_flow_style=False))
             return LzDeb.from_data(config_dir, data)
 
     def inject_file(self, container: DockerContainer, file_path: str) -> str:
@@ -369,11 +383,12 @@ class LzDeb:
                 assert len(deb_files) == 1, "Expected exactly %d deb files, saw %s" + str(deb_files)
                 deb_file = deb_files[0]
                 run_cmd("ls -l " + deb_file)
-                return self.builder.export_file(deb_file, os.getcwd())
+                exported_deb_file = self.builder.export_file(deb_file, os.getcwd())
+                logging.info("Exported built deb package file to %s%s%s",
+                             BColors.OKGREEN, exported_deb_file, BColors.ENDC)
+                return exported_deb_file
             finally:
                 self.deb_info.cleanup()
-
-            logging.info("Finished running install script")
         finally:
             self.builder.stop()
 
@@ -390,6 +405,8 @@ class LzDeb:
                                                file_path=self.validate_script)
             self.inject_file(container=self.validator, file_path=deb_file)
             run_cmd(cmd=validate_script, cwd=self.work_dir)
+            logging.info("Successfully validated deb file at %s%s%s",
+                         BColors.OKGREEN, deb_file, BColors.ENDC)
         finally:
             self.validator.stop()
 
@@ -401,6 +418,11 @@ def handle_build(args) -> int:
     deb_file = r.build()
     r.validate(deb_file)
     return 0
+
+
+def handle_missing_subcommand(args) -> int:
+    print("Must specify subcommand: lzdeb (build|)")
+    return 1
 
 
 def handle_common(args) -> None:
@@ -416,6 +438,7 @@ def main() -> int:
     build_parser = subparsers.add_parser('build')
     build_parser.add_argument('config_dir', help="lzdeb build config dir")
     build_parser.set_defaults(func=handle_build)
+    parser.set_defaults(func=handle_missing_subcommand)
 
     args = parser.parse_args()
     try:
